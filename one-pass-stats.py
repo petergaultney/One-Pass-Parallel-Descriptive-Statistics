@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# @author pgaultney
+# @author petergaultney
 
 from math import sqrt
 
