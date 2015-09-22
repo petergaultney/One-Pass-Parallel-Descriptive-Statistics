@@ -32,56 +32,40 @@ class OnePassParallelDescriptiveStats(object):
     def getStddev(self):
         return sqrt(self.getVariance())
 
-    def generateAggregate(self, B):
-        combined = OnePassParallelDescriptiveStats()
+    def mergeStats(self, B):
+        """
+        This is a non-destructive merge operation - it does not 
+        alter the values in the calling object or the supplied object.
+        It could just as easily be written as a class function.
+        """
+        merged = OnePassParallelDescriptiveStats()
         delta = B.mean - self.mean
-        combined.count = self.count + B.count
-        if combined.count > 0:
-            combined.mean = (self.count * self.mean + B.count * B.mean) / combined.count
-            combined.M2 = self.M2 + B.M2 + delta * delta * ((self.count * B.count) / combined.count)
+        merged.count = self.count + B.count
+        if merged.count > 0:
+            merged.mean = (self.count * self.mean + B.count * B.mean) / merged.count
+            merged.M2 = self.M2 + B.M2 + delta * delta * ((self.count * B.count) / merged.count)
         else:
-            combined.mean = 0.0
-            combined.M2 = 0.0
+            merged.mean = 0.0
+            merged.M2 = 0.0
 
         # mins, maxes
         if B.max > self.max:
-            combined.max = B.max
+            merged.max = B.max
         else:
-            combined.max = self.max
+            merged.max = self.max
         if B.min < self.min:
-            combined.min = B.min
+            merged.min = B.min
         else:
-            combined.min = self.min
+            merged.min = self.min
 
-        return combined
+        return merged
 
 def op_stats_to_str(stats):
     return 'Mean {} | Count {} | Stddev {} | Min {} | Max {}'.format(
         stats.mean, stats.count, stats.getStddev(), stats.min, stats.max)
-    
 
-if __name__ == '__main__':
+def test_single_set(norm_dist):
     import numpy as np
-
-    # make a normal distribution to test the algorithm
-    dist_size = 1000000
-    expected_mean = 42.3
-    expected_sigma = 67.3
-
-    import sys
-
-    if len(sys.argv) > 1:
-        dist_size = int(sys.argv[1])
-    if len(sys.argv) > 2:
-        expected_mean = float(sys.argv[2])
-    if len(sys.argv) > 3:
-        expected_sigma = float(sys.argv[3])
-    
-    print('Generating normal distribution of size {} with '.format(dist_size) +
-          'expected mean {} and expected stddev {}.'.format(
-              expected_mean, expected_sigma))
-    norm_dist = np.random.normal(expected_mean, expected_sigma, dist_size)
-
     print('Calculating descriptive statistics using the one-pass algorithm...')
     onepass_stats = OnePassParallelDescriptiveStats()
     for number in norm_dist:
@@ -95,5 +79,64 @@ if __name__ == '__main__':
     print('one-pass: ' + str(onepass_stats.getStddev()))
     print('numpy:    ' + str(np.std(norm_dist, ddof=1)))
 
-
     print('all one-pass stats: ' + op_stats_to_str(onepass_stats))
+    return onepass_stats
+
+def make_stats(dist):
+    stats = OnePassParallelDescriptiveStats()
+    for value in dist:
+        stats.addValue(value)
+    return stats
+        
+def test_merge(original_dist, parallel_nb):
+    import numpy as np
+    dists = np.split(original_dist, parallel_nb)
+    stats_list = list()
+
+    from multiprocessing import Pool
+
+    pool = Pool(processes=parallel_nb,)
+    
+    stats_list = pool.map(make_stats, dists)
+    
+    merged_stats = OnePassParallelDescriptiveStats()
+    for stats in stats_list:
+        merged_stats = merged_stats.mergeStats(stats)
+
+    print('split ({}) & merged: '.format(parallel_nb) + op_stats_to_str(merged_stats))
+        
+if __name__ == '__main__':
+    import numpy as np
+
+    # make a normal distribution to test the algorithm
+    dist_size = 1000000
+    expected_mean = 42.3
+    expected_sigma = 67.3
+    parallel_nb = 10
+    
+    import sys
+
+    if len(sys.argv) > 1:
+        dist_size = int(sys.argv[1])
+    if len(sys.argv) > 2:
+        expected_mean = float(sys.argv[2])
+    if len(sys.argv) > 3:
+        expected_sigma = float(sys.argv[3])
+    if len(sys.argv) > 4:
+        parallel_nb = int(sys.argv[4])
+    
+    print('Testing normal distribution of size {} with '.format(dist_size) +
+          'expected mean {} and expected stddev {}.'.format(
+              expected_mean, expected_sigma))
+    norm_dist = np.random.normal(expected_mean, expected_sigma, dist_size)
+    import time
+    t0 = time.time()
+    test_single_set(norm_dist)
+    single = time.time() - t0
+    print('Single threaded test run in ' + str(single) + ' seconds')
+
+    print('Now testing a map-reduce version using the same algorithm, but parallelized for speedup...')
+    t0 = time.time()
+    test_merge(norm_dist, parallel_nb)
+    multi = time.time() - t0
+    print('Multi-threaded test run in ' + str(multi) + ' seconds, for a speedup of ' + str(single/multi))
