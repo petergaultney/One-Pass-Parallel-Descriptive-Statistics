@@ -3,14 +3,14 @@
 #include <limits>
 
 // This class is not thread safe.
-class OnePassParallelDescriptiveStats
+class OnePassDescriptiveStats
 {
 public:
 	void addValue(double value);
 	double getVariance() const;
 	double getStddev() const;
 
-	OnePassParallelDescriptiveStats aggregateSet(const OnePassParallelDescriptiveStats& B) const;
+	OnePassDescriptiveStats aggregateWithSet(const OnePassDescriptiveStats& B) const;
 
 	unsigned long long count = 0;
 	double mean = 0.0;
@@ -18,8 +18,11 @@ public:
 	double min = std::numeric_limits<double>::max();
 	double max = std::numeric_limits<double>::min();
 		
-private:
 	double M2 = 0.0;
+
+public:
+	static OnePassDescriptiveStats aggregateSets(const OnePassDescriptiveStats& A,
+												 const OnePassDescriptiveStats& B);
 };
 
 /*
@@ -28,7 +31,7 @@ private:
  */
 #include <cmath>
 
-inline void OnePassParallelDescriptiveStats::addValue(double value)
+inline void OnePassDescriptiveStats::addValue(double value)
 {
 	if (value > this->max) {
 		this->max = value;
@@ -46,7 +49,7 @@ inline void OnePassParallelDescriptiveStats::addValue(double value)
 /**
  * This is the sample, not population, variance.
  */
-inline double OnePassParallelDescriptiveStats::getVariance() const
+inline double OnePassDescriptiveStats::getVariance() const
 {
 	if (this->count < 2) {
 		return 0.0;
@@ -55,36 +58,42 @@ inline double OnePassParallelDescriptiveStats::getVariance() const
 	}
 }
 
-inline double OnePassParallelDescriptiveStats::getStddev() const
+inline double OnePassDescriptiveStats::getStddev() const
 {
 	return sqrt(this->getVariance());
 }
 
-inline OnePassParallelDescriptiveStats OnePassParallelDescriptiveStats::aggregateSet(
-	const OnePassParallelDescriptiveStats& B) const
+inline OnePassDescriptiveStats OnePassDescriptiveStats::aggregateWithSet(
+	const OnePassDescriptiveStats& B) const
 {
-	OnePassParallelDescriptiveStats combined;
+	return OnePassDescriptiveStats::aggregateSets(*this, B);
+}
+
+inline OnePassDescriptiveStats OnePassDescriptiveStats::aggregateSets(const OnePassDescriptiveStats& A,
+																	  const OnePassDescriptiveStats& B)
+{
+	OnePassDescriptiveStats combined;
 	// this algorithm due to Chan et al., also from Wikipedia page above
-	double delta = B.mean - this->mean;
-	combined.count = this->count + B.count;
+	double delta = B.mean - A.mean;
+	combined.count = A.count + B.count;
 	if (combined.count > 0) {
-		combined.mean = (this->count * this->mean + B.count * B.mean) / combined.count;
-		combined.M2 = this->M2 + B.M2 + delta * delta * ((this->count * B.count) / combined.count);
+		combined.mean = (A.count * A.mean + B.count * B.mean) / combined.count;
+		combined.M2 = A.M2 + B.M2 + delta * delta * ((double)(A.count * B.count) / combined.count);
 	} else { // if we're combining two empty sets, we don't want floating point exceptions.
 		combined.mean = 0;
 		combined.M2 = 0;
 	}
 
 	// mins, maxes
-	if (B.max > this->max) {
+	if (B.max > A.max) {
 		combined.max = B.max;
 	} else {
-		combined.max = this->max;
+		combined.max = A.max;
 	}
-	if (B.min < this->min) {
+	if (B.min < A.min) {
 		combined.min = B.min;
 	} else {
-		combined.min = this->min;
+		combined.min = A.min;
 	}
 
 	return combined;
