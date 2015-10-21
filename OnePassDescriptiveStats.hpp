@@ -21,8 +21,9 @@ public:
 	double M2 = 0.0;
 
 public:
-	static OnePassDescriptiveStats aggregateSets(const OnePassDescriptiveStats& A,
-												 const OnePassDescriptiveStats& B);
+	static OnePassDescriptiveStats aggregateSets(
+		const OnePassDescriptiveStats& A,
+		const OnePassDescriptiveStats& B);
 };
 
 /*
@@ -69,8 +70,9 @@ inline OnePassDescriptiveStats OnePassDescriptiveStats::aggregateWithSet(
 	return OnePassDescriptiveStats::aggregateSets(*this, B);
 }
 
-inline OnePassDescriptiveStats OnePassDescriptiveStats::aggregateSets(const OnePassDescriptiveStats& A,
-																	  const OnePassDescriptiveStats& B)
+inline OnePassDescriptiveStats OnePassDescriptiveStats::aggregateSets(
+	const OnePassDescriptiveStats& A,
+	const OnePassDescriptiveStats& B)
 {
 	OnePassDescriptiveStats combined;
 	// this algorithm due to Chan et al., also from Wikipedia page above
