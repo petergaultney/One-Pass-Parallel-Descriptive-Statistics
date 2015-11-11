@@ -18,7 +18,7 @@ from __future__ import print_function
 from math import sqrt
 
 # from https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
-class OnePassParallelDescriptiveStats(object):
+class ParallelDescriptiveStats(object):
 
     def __init__(self):
         self.count = 0
@@ -57,7 +57,7 @@ class OnePassParallelDescriptiveStats(object):
         alter the values in the calling object or the supplied object.
         It could just as easily be written as a class function.
         """
-        merged = OnePassParallelDescriptiveStats()
+        merged = ParallelDescriptiveStats()
         delta = B.mean - self.mean
         merged.count = self.count + B.count
         if merged.count > 0:
@@ -79,10 +79,41 @@ class OnePassParallelDescriptiveStats(object):
 
         return merged
 
+# from http://prod.sandia.gov/techlib/access-control.cgi/2008/086212.pdf
+class ParallelCovariance(object):
+    def __init__(self):
+        self.co2 = 0.0 # 2nd comoment
+        self.X = ParallelDescriptiveStats()
+        self.Y = ParallelDescriptiveStats()
+    def add_pair(self, x, y):
+        self.X.addValue(x)
+        self.Y.addValue(y)
+        self.co2 = self.co2 + (self.X.count - 1)*self.X.delta*self.Y.delta/self.X.count
+    def covariance(self, sample=False):
+        div_factor = self.X.count
+        if sample:
+            div_factor = self.X.count - 1
+        if self.X.count > 1:
+            return self.co2/div_factor
+        else:
+            return 0.0
+    def pearson(self):
+        return self.covariance() / (self.X.getStddev() * self.Y.getStddev())
+    def merge(A, B):
+        C = ParallelCovariance()
+        C.X = A.X.merge(B.X)
+        C.Y = A.Y.merge(B.Y)
+        dx21 = B.X.mean - A.X.mean
+        dy21 = B.Y.mean - A.Y.mean
+        C.co2 = A.co2 + B.co2 + A.X.count * B.X.count * dx21 * dy21 / C.X.count
+        return C
+
+# do not use this class. the merge does not work. it is here because
+# someday I want to understand why the merge is broken.
 class BrokenOnePassCovariance(object):
     def __init__(self):
-        self.X = OnePassParallelDescriptiveStats()
-        self.Y = OnePassParallelDescriptiveStats()
+        self.X = ParallelDescriptiveStats()
+        self.Y = ParallelDescriptiveStats()
         self.M12 = 0.0
         self.sample = False
     def add_pair(self, x, y):
@@ -147,7 +178,7 @@ def op_stats_to_str(stats):
 def test_single_set(norm_dist):
     import numpy as np
     print('Calculating descriptive statistics using the one-pass algorithm...')
-    onepass_stats = OnePassParallelDescriptiveStats()
+    onepass_stats = ParallelDescriptiveStats()
     for number in norm_dist:
         onepass_stats.addValue(number)
 
@@ -163,7 +194,7 @@ def test_single_set(norm_dist):
     return onepass_stats
 
 def make_stats(dist):
-    stats = OnePassParallelDescriptiveStats()
+    stats = ParallelDescriptiveStats()
     for value in dist:
         stats.addValue(value)
     return stats
@@ -186,40 +217,12 @@ def test_merge(original_dist, parallel_nb):
     
     stats_list = pool.map(make_stats, dists)
     
-    merged_stats = OnePassParallelDescriptiveStats()
+    merged_stats = ParallelDescriptiveStats()
     for stats in stats_list:
         merged_stats = merged_stats.merge(stats)
 
     print('split ({}) & merged: '.format(parallel_nb) + op_stats_to_str(merged_stats))
 
-# from http://prod.sandia.gov/techlib/access-control.cgi/2008/086212.pdf
-class ParallelCovariance(object):
-    def __init__(self):
-        self.co2 = 0.0 # 2nd comoment
-        self.X = OnePassParallelDescriptiveStats()
-        self.Y = OnePassParallelDescriptiveStats()
-    def add_pair(self, x, y):
-        self.X.addValue(x)
-        self.Y.addValue(y)
-        self.co2 = self.co2 + (self.X.count - 1)*self.X.delta*self.Y.delta/self.X.count
-    def covariance(self, sample=False):
-        div_factor = self.X.count
-        if sample:
-            div_factor = self.X.count - 1
-        if self.X.count > 1:
-            return self.co2/div_factor
-        else:
-            return 0.0
-    def pearson(self):
-        return self.covariance() / (self.X.getStddev() * self.Y.getStddev())
-    def merge(A, B):
-        C = ParallelCovariance()
-        C.X = A.X.merge(B.X)
-        C.Y = A.Y.merge(B.Y)
-        dx21 = B.X.mean - A.X.mean
-        dy21 = B.Y.mean - A.Y.mean
-        C.co2 = A.co2 + B.co2 + A.X.count * B.X.count * dx21 * dy21 / C.X.count
-        return C
     
 def test_covar(distX, distY):
     print('distX = ' + str(distX))
