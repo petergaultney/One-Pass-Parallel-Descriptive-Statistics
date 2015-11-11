@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from __future__ import division
+from __future__ import print_function
 from math import sqrt
 
 class OnePassParallelDescriptiveStats(object):
@@ -23,8 +24,8 @@ class OnePassParallelDescriptiveStats(object):
         self.mean = 0.0
         self.min = float('inf')
         self.max = -float('inf')
-        self.M2 = 0.0
-        self.delta = 0.0 # this is useful for covariance calc
+        self.M2 = 0.0 # second moment
+        self.delta = 0.0 # this is useful for a separate covariance calculation
 
     def addValue(self, value):
         if value > self.max:
@@ -37,11 +38,14 @@ class OnePassParallelDescriptiveStats(object):
         self.mean = self.mean + self.delta / self.count
         self.M2 = self.M2 + self.delta * (value - self.mean)
 
-    def getVariance(self):
+    def getVariance(self, sample=True):
         if (self.count < 2):
             return 0.0
         else:
-            return self.M2 / (self.count - 1) # sample variance
+            sample_factor = 0
+            if sample:
+                sample_factor = 1
+            return self.M2 / (self.count - sample_factor)
 
     def getStddev(self):
         return sqrt(self.getVariance())
@@ -57,7 +61,7 @@ class OnePassParallelDescriptiveStats(object):
         merged.count = self.count + B.count
         if merged.count > 0:
             merged.mean = (self.count * self.mean + B.count * B.mean) / merged.count
-            merged.M2 = self.M2 + B.M2 + delta * delta * ((self.count * B.count) / merged.count)
+            merged.M2 = self.M2 + B.M2 + delta * delta * self.count * B.count / merged.count
         else:
             merged.mean = 0.0
             merged.M2 = 0.0
@@ -74,7 +78,7 @@ class OnePassParallelDescriptiveStats(object):
 
         return merged
 
-class OnePassCovariance(object):
+class BrokenOnePassCovariance(object):
     def __init__(self):
         self.X = OnePassParallelDescriptiveStats()
         self.Y = OnePassParallelDescriptiveStats()
@@ -105,22 +109,25 @@ class OnePassCovariance(object):
     # X and Y random variables and finds the overall covariance.
     def merge(covA, covB):
         # CA + CB + (MXA - MXB)(MYA - MYB)(nA*nB/nX)
-        xdiffmean = covA.X.mean - covB.X.mean
-        ydiffmean = covA.Y.mean - covB.Y.mean
+        xdiffmean = covB.X.mean - covA.X.mean
+        ydiffmean = covB.Y.mean - covA.Y.mean
         print('diffmeans', xdiffmean, ydiffmean)
         combinedX = covA.X.merge(covB.X)
         combinedY = covA.Y.merge(covB.Y)
         print(op_stats_to_str(combinedX), op_stats_to_str(combinedY))
         if combinedX.count != combinedY.count:
             print('uh oh! the merge is impossible!')
+        #else combinedX.count and combinedY.count are interchangeable
         if combinedX.count > 0:
             print(covA.X.count, covB.X.count, combinedY.count)
-            n_ab_x = (covA.X.count * covB.X.count) / combinedY.count
+            nanb_nx = (covA.X.count * covB.X.count) / combinedY.count
         else:
-            n_ab_x = 0.0
-        print('n_ab_x', n_ab_x)
-        covX = covA.covariance() + covB.covariance() + xdiffmean * ydiffmean * n_ab_x
-        print('internal covX', covX)
+            nanb_nx = 0.0
+        print('nanb_nx', nanb_nx)
+        print('partial', xdiffmean * ydiffmean * nanb_nx)
+        
+        coX = covA.covariance()*covA.X.count + covB.covariance()*covB.X.count + xdiffmean * ydiffmean * nanb_nx
+        print('internal coX', coX, coX/combinedX.count)
         new_covar_obj = OnePassCovariance()
         new_covar_obj.X = combinedX
         new_covar_obj.Y = combinedY
@@ -129,7 +136,7 @@ class OnePassCovariance(object):
             if covA.sample and covB.sample:
                 sample_factor = combinedX.count / (combinedX.count - 1.0)
                 new_covar_obj.sample = True
-            new_covar_obj.M12 = covX / sample_factor
+            new_covar_obj.M12 = coX / sample_factor
         return new_covar_obj
 
 def op_stats_to_str(stats):
@@ -143,11 +150,11 @@ def test_single_set(norm_dist):
     for number in norm_dist:
         onepass_stats.addValue(number)
 
-    print('The following OnePass and batched mean values should match: ')
+    print('The following OnePass and numpy-calculated means should match: ')
     print('one-pass: ' + str(onepass_stats.mean))
     print('numpy:    ' + str(np.mean(norm_dist)))
 
-    print('The following OnePass and batched stddev values should match: ')
+    print('The following OnePass and numpy-calculated stddevs should match: ')
     print('one-pass: ' + str(onepass_stats.getStddev()))
     print('numpy:    ' + str(np.std(norm_dist, ddof=1)))
 
@@ -161,12 +168,10 @@ def make_stats(dist):
     return stats
 
 def make_covar((distX, distY)):
-    covar = OnePassCovariance()
-    print('entering make covar')
+    covar = ParallelCovariance()
     for x, y in zip(distX, distY):
-        print('adding pair: ' + str(x) + ' ' + str(y))
         covar.add_pair(x, y)
-    print('cov: ' + str(covar.covariance()) + ' pears: ' + str(covar.pearson()))
+    print('make cov: ' + str(covar.covariance()) + ' pears: ' + str(covar.pearson()))
     return covar
 
 def test_merge(original_dist, parallel_nb):
@@ -186,40 +191,71 @@ def test_merge(original_dist, parallel_nb):
 
     print('split ({}) & merged: '.format(parallel_nb) + op_stats_to_str(merged_stats))
 
+class ParallelCovariance(object):
+    def __init__(self):
+        self.co2 = 0.0 # 2nd comoment
+        self.X = OnePassParallelDescriptiveStats()
+        self.Y = OnePassParallelDescriptiveStats()
+    def add_pair(self, x, y):
+        self.X.addValue(x)
+        self.Y.addValue(y)
+        self.co2 = self.co2 + (self.X.count - 1)*self.X.delta*self.Y.delta/self.X.count
+    def covariance(self, sample=False):
+        div_factor = self.X.count
+        if sample:
+            div_factor = self.X.count - 1
+        if self.X.count > 1:
+            return self.co2/div_factor
+        else:
+            return 0.0
+    def pearson(self):
+        return self.covariance() / (self.X.getStddev() * self.Y.getStddev())
+    def merge(A, B):
+        C = ParallelCovariance()
+        C.X = A.X.merge(B.X)
+        C.Y = A.Y.merge(B.Y)
+        dx21 = B.X.mean - A.X.mean
+        dy21 = B.Y.mean - A.Y.mean
+        C.co2 = A.co2 + B.co2 + A.X.count * B.X.count * dx21 * dy21 / C.X.count
+        return C
+    
 def test_covar(distX, distY):
     print('distX = ' + str(distX))
     print('distY = ' + str(distY))
     
-    covar = OnePassCovariance()
+    covar = ParallelCovariance()
     for x, y in zip(distX, distY):
         covar.add_pair(x, y)
     print('OnePass Covariance: ' + str(covar.covariance()) + '; Pearson: ' + str(covar.pearson()))
 
     ox = make_stats(distX)
     oy = make_stats(distY)
+    print('correct stats: ', op_stats_to_str(ox), op_stats_to_str(oy))
     
     print('Naive, two-pass Covariance: '
           + str(naive_covariance(distX, distY))
           + '; Pearson: ' + str(naive_covariance(distX, distY) / (ox.getStddev() * oy.getStddev())))
 
     import numpy as np
-    split_xs = np.split(np.array(distX), 2)
-    split_ys = np.split(np.array(distY), 2)
+    split_xs = np.split(np.array(distX), 4)
+    split_ys = np.split(np.array(distY), 4)
+
+    print('Testing covariance merge algorithm...')
     
     from multiprocessing import Pool
 
-    pool = Pool(processes=parallel_nb,)
+    pool = Pool(processes=4,)
     
     covars_list = pool.map(make_covar, zip(split_xs, split_ys))
-    naive_list = pool.map(naive_pop_wrapper, zip(split_xs, split_ys))
-    print(naive_list)
+    #naive_list = pool.map(naive_pop_wrapper, zip(split_xs, split_ys))
+    #print(naive_list)
 
-    merged_covar = OnePassCovariance()
+    merged_covar = ParallelCovariance()
     for covar in covars_list:
-        print('A: ' + str(merged_covar.covariance()))
-        print('B: ' + str(covar.covariance()))
+        #print('A: ' + str(merged_covar.covariance()))
+        #print('B: ' + str(covar.covariance()))
         merged_covar = merged_covar.merge(covar)
-        print('C: ' + str(merged_covar.covariance()))
+        #print('C: ' + str(merged_covar.covariance()))
 
     print(merged_covar.covariance())
     print(merged_covar.pearson())
@@ -239,7 +275,13 @@ def naive_covariance(data1, data2, sample=False):
 
 def naive_pop_wrapper((data1, data2)):
     return naive_covariance(data1, data2)
-    
+
+def make_comom2(data1, data2):
+    comom = ParallelCovariance()
+    for x, y in zip(data1, data2):
+        comom.add_pair(x,y)
+    return comom
+
 if __name__ == '__main__':
     import numpy as np
 
@@ -276,7 +318,18 @@ if __name__ == '__main__':
     multi = time.time() - t0
     print('Multi-threaded test run in ' + str(multi) + ' seconds, for a speedup of ' + str(single/multi))
 
-    x = [1, 3, 5, 7, 9, 11]
-    y = [4, 17, 24, 33, 77, 119]
+    x = [1, 3, 5, 7, 9, 11, 13, 15]
+    y = [4, 17, 24, 33, 77, 119, 200, 270]
     
     test_covar(x, y)
+
+    blah = ParallelCovariance()
+    for i in range(len(x)):
+        blah.add_pair(x[i], y[i])
+    print(blah.covariance())
+
+    blah1 = make_comom2(x[0:4], y[0:4])
+    blah2 = make_comom2(x[4:8], y[4:8])
+    blah = blah1.merge(blah2)
+    print(blah.covariance(sample=True))
+    print(naive_covariance(x, y, sample=True))
