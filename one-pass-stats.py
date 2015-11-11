@@ -17,6 +17,7 @@ from __future__ import division
 from __future__ import print_function
 from math import sqrt
 
+# from https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
 class OnePassParallelDescriptiveStats(object):
 
     def __init__(self):
@@ -191,6 +192,7 @@ def test_merge(original_dist, parallel_nb):
 
     print('split ({}) & merged: '.format(parallel_nb) + op_stats_to_str(merged_stats))
 
+# from http://prod.sandia.gov/techlib/access-control.cgi/2008/086212.pdf
 class ParallelCovariance(object):
     def __init__(self):
         self.co2 = 0.0 # 2nd comoment
