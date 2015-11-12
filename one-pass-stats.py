@@ -51,33 +51,32 @@ class ParallelDescriptiveStats(object):
     def getStddev(self):
         return sqrt(self.getVariance())
 
-    def merge(self, B):
+    def merge(A, B):
         """
         This is a non-destructive merge operation - it does not 
         alter the values in the calling object or the supplied object.
-        It could just as easily be written as a class function.
         """
-        merged = ParallelDescriptiveStats()
-        delta = B.mean - self.mean
-        merged.count = self.count + B.count
-        if merged.count > 0:
-            merged.mean = (self.count * self.mean + B.count * B.mean) / merged.count
-            merged.M2 = self.M2 + B.M2 + delta * delta * self.count * B.count / merged.count
+        C = ParallelDescriptiveStats()
+        delta = B.mean - A.mean
+        C.count = A.count + B.count
+        if C.count > 0:
+            C.mean = (A.count * A.mean + B.count * B.mean) / C.count
+            C.M2 = A.M2 + B.M2 + delta * delta * A.count * B.count / C.count
         else:
-            merged.mean = 0.0
-            merged.M2 = 0.0
+            C.mean = 0.0
+            C.M2 = 0.0
 
         # mins, maxes
-        if B.max > self.max:
-            merged.max = B.max
+        if B.max > A.max:
+            C.max = B.max
         else:
-            merged.max = self.max
-        if B.min < self.min:
-            merged.min = B.min
+            C.max = A.max
+        if B.min < A.min:
+            C.min = B.min
         else:
-            merged.min = self.min
+            C.min = A.min
 
-        return merged
+        return C
 
 # from http://prod.sandia.gov/techlib/access-control.cgi/2008/086212.pdf
 class ParallelCovariance(object):
@@ -89,7 +88,7 @@ class ParallelCovariance(object):
         self.X.addValue(x)
         self.Y.addValue(y)
         self.co2 = self.co2 + (self.X.count - 1)*self.X.delta*self.Y.delta/self.X.count
-    def covariance(self, sample=False):
+    def covariance(self, sample=True):
         div_factor = self.X.count
         if sample:
             div_factor = self.X.count - 1
@@ -97,15 +96,15 @@ class ParallelCovariance(object):
             return self.co2/div_factor
         else:
             return 0.0
-    def pearson(self):
-        return self.covariance() / (self.X.getStddev() * self.Y.getStddev())
+    def pearson(self, sample=True):
+        return self.covariance(sample) / (self.X.getStddev() * self.Y.getStddev())
     def merge(A, B):
         C = ParallelCovariance()
         C.X = A.X.merge(B.X)
         C.Y = A.Y.merge(B.Y)
         dx21 = B.X.mean - A.X.mean
         dy21 = B.Y.mean - A.Y.mean
-        C.co2 = A.co2 + B.co2 + A.X.count * B.X.count * dx21 * dy21 / C.X.count
+        C.co2 = A.co2 + B.co2 + dx21 * dy21 * A.X.count * B.X.count / C.X.count
         return C
 
 # do not use this class. the merge does not work. it is here because
@@ -178,9 +177,7 @@ def op_stats_to_str(stats):
 def test_single_set(norm_dist):
     import numpy as np
     print('Calculating descriptive statistics using the one-pass algorithm...')
-    onepass_stats = ParallelDescriptiveStats()
-    for number in norm_dist:
-        onepass_stats.addValue(number)
+    onepass_stats = make_stats(norm_dist)
 
     print('The following OnePass and numpy-calculated means should match: ')
     print('one-pass: ' + str(onepass_stats.mean))
@@ -291,7 +288,7 @@ if __name__ == '__main__':
     import numpy as np
 
     # make a normal distribution to test the algorithm
-    dist_size = 100000
+    dist_size = 1000000
     expected_mean = 42.3
     expected_sigma = 67.3
     parallel_nb = 10
